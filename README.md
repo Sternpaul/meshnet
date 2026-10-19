@@ -15,6 +15,39 @@ This is a maintained continuation of [MattsTechInfo/Meshnet](https://github.com/
 docker pull ghcr.io/sternpaul/meshnet:latest
 ```
 
+## Upgrading from MattsTechInfo/Meshnet (NordVPN 3.x)
+The last upstream image (`ghcr.io/mattstechinfo/meshnet:latest`, NordVPN 3.18.4 on Ubuntu Jammy) was built in September 2024 and receives no more updates. Upgrading is recommended mainly for **security**: a Meshnet node is an entry point into your network, and the old image misses two years of fixes.
+
+- **Security fixes in the NordVPN client:** 3.20.0 ("significant security improvements, updating strongly encouraged"), an OpenSSL vulnerability fix in 4.5.0, OpenVPN security and OpenSSL 3.0.17 in 4.1.0, hardened token handling in 4.6.0.
+- **Patched base image:** Ubuntu Noble, rebuilt weekly, instead of an unpatched 2024 Jammy image.
+- **Meshnet fixes:** Meshnet firewall rules are cleaned up properly when Meshnet is turned off (3.20.3), the local network permission can no longer be bypassed through LAN discovery (3.20.1), the file sharing library was updated (3.19.1), and unexpected logouts during token renewal are fixed (4.6.0).
+- **Old clients get cut off:** NordVPN has previously required clients to update before they can connect. Meshnet itself was announced for shutdown in 4.1.0 and kept in 4.2.0, only current clients receive such changes.
+
+Things that changed and may affect you:
+
+- **nftables instead of iptables (5.0):** the host kernel needs `nf_tables` (`lsmod | grep nf_tables`). NordVPN uses its own `inet nordvpn` table and only switches to a default-deny policy while a VPN connection or Kill Switch is active, Meshnet alone does not block other traffic. With `network_mode: host`, never run `nordvpn connect` or enable Kill Switch in this container, that would apply to the whole host.
+- **Logout revokes the token (4.x):** inside the container only use `nordvpn logout --persist-token`.
+- **IPv6 support was removed (4.0)**, Meshnet addresses are IPv4 so this does not affect Meshnet.
+- **Privacy consent prompt (4.0)** is answered automatically by this image (analytics off).
+
+The full NordVPN changelog is in the [releases](https://github.com/Sternpaul/meshnet/releases).
+
+### Keeping the same Meshnet device
+The device identity lives in `/var/lib/nordvpn/data/settings.dat` and `install.dat` inside your old container (the old image had no volume for it). Copy them into a volume before switching images, otherwise the new container registers as a new device. As long as the old container still exists (stopped is fine):
+
+```bash
+docker stop meshnet
+docker commit meshnet meshnet-backup:3.18.4
+mkdir -p meshnet-migrate
+docker cp meshnet:/var/lib/nordvpn/data/settings.dat meshnet-migrate/
+docker cp meshnet:/var/lib/nordvpn/data/install.dat meshnet-migrate/
+docker volume create meshnet-nordvpn-data
+docker run --rm -v meshnet-nordvpn-data:/var/lib/nordvpn -v "$PWD/meshnet-migrate:/migrate:ro" \
+  --entrypoint cp ghcr.io/sternpaul/meshnet:latest /migrate/settings.dat /migrate/install.dat /var/lib/nordvpn/data/
+```
+
+Then point your compose file at `ghcr.io/sternpaul/meshnet:latest`, mount the volume (`external: true`, `name: meshnet-nordvpn-data`) at `/var/lib/nordvpn`, keep the same `hostname`, and run `docker compose up -d`. The log should show `Already logged in.` and no new device appears in your Meshnet. To roll back, switch the image to `meshnet-backup:3.18.4` and remove the volume. Delete `meshnet-migrate` afterwards, it contains your login.
+
 ## General Meshnet information
 Meshnet is a free self hosted VPN network connecting multiple nodes together. Its functionality, provided with the NordVPN application, is available on most platforms, including Android/Google TV. The usecases are extensive, the most popular ones are to access local data/network through Meshnet while having remote clients or setting up an exit node to route all client traffic through a single location.
 Read more about Meshnet over here: https://meshnet.nordvpn.com/
