@@ -196,3 +196,65 @@ jobs:
             NORDVPN_CLIENT_VERSION=${{ needs.check.outputs.version }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [check, build-push]
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: write
+      packages: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - name: Login to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create release for a new NordVPN client version
+        run: |
+          set -euo pipefail
+          TAG="v${VERSION}"
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "Release ${TAG} already exists, image rebuilt without a new release."
+            exit 0
+          fi
+
+          # Changelog since the previous release, 3.18.4 was the last upstream image
+          PREV=$(gh release list -R "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases \
+            --limit 1 --json tagName --jq '.[0].tagName // ""')
+          PREV="${PREV#v}"
+          PREV="${PREV:-3.18.4}"
+          IMAGE="${REGISTRY}/${IMAGE_NAME,,}"
+
+          {
+            echo "NordVPN Linux client **${VERSION}** on Ubuntu Noble, for \`linux/amd64\` and \`linux/arm64\`."
+            echo
+            echo '```'
+            echo "docker pull ${IMAGE}:${VERSION}"
+            echo '```'
+            echo
+            echo "Also tagged \`${VERSION%.*}\`, \`${VERSION%%.*}\` and \`latest\`."
+            echo
+            echo "## NordVPN client changes since ${PREV}"
+            echo
+            docker run --rm --pull always --entrypoint zcat "${IMAGE}:${VERSION}" \
+              /usr/share/doc/nordvpn/changelog.Debian.gz \
+              | awk -v prev="nordvpn (${PREV})" '
+                  index($0, prev) == 1 { exit }
+                  /^nordvpn \(/ { sub(/^nordvpn \(/, "### "); sub(/\).*/, ""); print ""; print; next }
+                  /^  \* / { sub(/^  \* /, "- "); print }
+                '
+            if [ "$PREV" != "3.18.4" ]; then
+              echo
+              echo "**Repository changes:** https://github.com/${GITHUB_REPOSITORY}/compare/v${PREV}...${TAG}"
+            fi
+          } > notes.md
+          cat notes.md
+
+          gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "NordVPN ${VERSION}" --notes-file notes.md --latest

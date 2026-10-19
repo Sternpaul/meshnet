@@ -9,6 +9,7 @@ This is a maintained continuation of [MattsTechInfo/Meshnet](https://github.com/
 - **Daily check**: CI checks NordVPN's apt repository every day and publishes a new image as soon as NordVPN ships a new Linux client.
 - **Weekly rebuild**: the image is rebuilt every week regardless, to pick up base image security patches.
 - Images are tagged with the NordVPN client version they contain (e.g. `5.4.1`, `5.4`, `5`) plus `latest`, for `linux/amd64` and `linux/arm64`.
+- Every new NordVPN client version gets a [GitHub release](https://github.com/Sternpaul/meshnet/releases) with NordVPN's changelog, so you can watch the repository for releases to get notified.
 
 ```
 docker pull ghcr.io/sternpaul/meshnet:latest
@@ -30,8 +31,8 @@ This container requires an `Access token` to log on the NordVPN client. Follow t
 - Press the "Generate new token" button
 - Choose "Doesn't expire" unless you want to rotate the token yourself
 
-### iptables requirement
-The NordVPN client makes use of iptables to route and block traffic. The underlying host OS is required to have iptables libraries installed before this container can enable Meshnet. Next to the default iptables functionality, it also requires several iptables modules.
+### nftables requirement
+Since NordVPN 5.0 the client manages its firewall with nftables instead of iptables, with a default-deny policy. The host kernel must support nftables (`nf_tables` module), which all current distributions do. Some older NAS kernels (e.g. certain Synology models) do not; Meshnet will fail to come up there.
 
 ### Environment variables
 A `.env` file is supplied with the `docker-compose.yml` file for configuration purposes, this file already contains quite some commentary. A `configMap` is supplied for Kubernetes deployments.
@@ -80,13 +81,13 @@ NordVPN and Meshnet functionality require permissions to create a tunnel interfa
 Make sure you have the `meshnet-env.yaml` file configured and run `kubectl apply -f <meshnet_folder> -n <namespace>` to start the container. The node/peer should show up in your Meshnet within a few seconds.
 
 ## ARM64
-Next to the default AMD64 platform this container is also built for ARM64. This will allow for easy deployment on Ampere based K8s nodes or VM's in, for example, the Free-Tier Oracle Cloud Infrastructure. At this moment, specific OKE images seem to miss some iptables modules, running `sudo modprobe iptable_filter` on your worker nodes will fix this.
+Next to the default AMD64 platform this container is also built for ARM64. This will allow for easy deployment on Ampere based K8s nodes or VM's in, for example, the Free-Tier Oracle Cloud Infrastructure. If Meshnet fails to start on a node, make sure the `nf_tables` kernel module is loaded (`sudo modprobe nf_tables`).
 
 ## Updating
 Every published image is tagged `latest`, so a container using `ghcr.io/sternpaul/meshnet:latest` picks up new NordVPN clients with `docker compose pull && docker compose up -d`, or automatically with a tool such as [Watchtower](https://containrrr.dev/watchtower/). Pin a version tag (e.g. `5.4.1`) instead if you prefer to update by hand.
 
 ## Synology
-A few users have had some problems with certain Synology devices as these do not come with the correct iptables modules.
+A few users have had some problems with certain Synology devices as these do not come with the required netfilter (nftables) kernel modules.
 
 ## Credits
 Originally created by [Matts Bos / MattsTechInfo](https://github.com/MattsTechInfo/Meshnet). The NordVPN 5.x fixes (repository URL, script permissions, analytics prompt, persisted device identity) follow those found by [nmbradley/nordvpn-meshnet](https://github.com/nmbradley/nordvpn-meshnet).

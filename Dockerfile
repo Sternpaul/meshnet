@@ -9,13 +9,16 @@ ARG NORDVPN_CLIENT_VERSION=
 # Avoid interactions during build process
 ARG DEBIAN_FRONTEND=noninteractive
 
-# Install dependencies, get the NordVPN Repo, install NordVPN client, cleanup and set executables
+# Install dependencies, get the NordVPN Repo, install NordVPN client (without the GUI), cleanup and set executables
 RUN echo "**** Get NordVPN Repo ****" && \
     curl -fsSL https://repo.nordvpn.com/deb/nordvpn/debian/pool/main/n/nordvpn-release/nordvpn-release_1.0.0_all.deb --output /tmp/nordvpnrepo.deb && \
     apt-get install -y /tmp/nordvpnrepo.deb && \
     apt-get update -y && \
     echo "**** Install NordVPN client ****" && \
-    apt-get install -y nordvpn${NORDVPN_CLIENT_VERSION:+=$NORDVPN_CLIENT_VERSION} && \
+    apt-get install -y --no-install-recommends \
+        iptables \
+        nftables \
+        nordvpn${NORDVPN_CLIENT_VERSION:+=$NORDVPN_CLIENT_VERSION} && \
     echo "**** Cleanup ****" && \
     apt-get remove -y nordvpn-release && \
     apt-get autoremove -y && \
