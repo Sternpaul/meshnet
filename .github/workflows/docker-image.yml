@@ -2,28 +2,160 @@ name: Docker Image CI
 
 on:
   push:
+    branches:
+      - 'master'
     paths:
       - 'fs/**'
       - 'Dockerfile'
-    branches:
-      - 'master'
-    tags:
-      - v*
+      - '.github/workflows/docker-image.yml'
+  pull_request:
+    paths:
+      - 'fs/**'
+      - 'Dockerfile'
+      - '.github/workflows/docker-image.yml'
+  schedule:
+    # Daily: build only if NordVPN released a new client version
+    - cron: '17 4 * * *'
+    # Weekly: rebuild regardless to pick up base image security patches
+    - cron: '43 5 * * 0'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Build even if the latest client version is already published'
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  NORDVPN_REPO: https://repo.nordvpn.com/deb/nordvpn/debian/dists/stable/main
 
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      build: ${{ steps.resolve.outputs.build }}
+    steps:
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve latest NordVPN client version and decide whether to build
+        id: resolve
+        env:
+          EVENT: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          versions() {
+            curl -fsSL "${NORDVPN_REPO}/binary-$1/Packages" \
+              | awk '/^Package: nordvpn$/{f=1} f && /^Version:/{print $2; f=0}' | sort -u
+          }
+          # Newest version available for both architectures
+          VERSION=$(comm -12 <(versions amd64) <(versions arm64) | sort -V | tail -1)
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Unexpected NordVPN version '${VERSION}'"; exit 1; }
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Latest NordVPN client: ${VERSION}"
+
+          IMAGE="${REGISTRY}/${IMAGE_NAME,,}:${VERSION}"
+          BUILD=true
+          if [[ "$EVENT" == "schedule" && "$SCHEDULE" == "17 4 * * *" ]] || [[ "$EVENT" == "workflow_dispatch" && "$FORCE" != "true" ]]; then
+            if docker buildx imagetools inspect "$IMAGE" > /dev/null 2>&1; then
+              BUILD=false
+              echo "${IMAGE} already published, skipping build."
+            fi
+          fi
+          echo "build=${BUILD}" >> "$GITHUB_OUTPUT"
+
+  smoke-test:
+    runs-on: ubuntu-latest
+    needs: check
+    if: needs.check.outputs.build == 'true'
+    permissions:
+      contents: read
+    env:
+      # Optional secret: with it the image must log in and join Meshnet
+      HAS_TOKEN: ${{ secrets.NORDVPN_TOKEN != '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build test image (amd64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: meshnet:smoke
+          build-args: |
+            NORDVPN_CLIENT_VERSION=${{ needs.check.outputs.version }}
+
+      - name: Check client version
+        run: |
+          docker run --rm --entrypoint nordvpn meshnet:smoke --version \
+            | grep -F "${{ needs.check.outputs.version }}"
+
+      - name: Start container
+        env:
+          NORDVPN_TOKEN: ${{ secrets.NORDVPN_TOKEN }}
+        run: |
+          # Fixed hostname so every CI run reuses the same Meshnet identity
+          docker run -d --name smoke --hostname github-ci-smoke \
+            --cap-add NET_ADMIN --cap-add NET_RAW \
+            -e NORDVPN_TOKEN meshnet:smoke
+
+      - name: Daemon starts and login script runs (no token)
+        if: env.HAS_TOKEN != 'true'
+        run: |
+          # Without a token the login script must reach the daemon and stop
+          for i in $(seq 1 30); do
+            docker logs smoke 2>&1 | grep -q 'No token set.' && { echo "Login script reached the daemon."; exit 0; }
+            sleep 2
+          done
+          docker logs smoke; exit 1
+
+      - name: Login and join Meshnet (with NORDVPN_TOKEN secret)
+        if: env.HAS_TOKEN == 'true'
+        run: |
+          for i in $(seq 1 30); do
+            docker exec smoke nordvpn meshnet peer list > /dev/null 2>&1 && break
+            if [ "$(docker inspect -f '{{.State.Running}}' smoke)" != "true" ]; then
+              echo "Container exited prematurely"; docker logs smoke; exit 1
+            fi
+            sleep 5
+          done
+          docker exec smoke nordvpn account | grep -q 'Email' || { echo "Login failed"; docker logs smoke; exit 1; }
+          docker exec smoke nordvpn meshnet peer list > /dev/null || { echo "Meshnet not up"; docker logs smoke; exit 1; }
+          echo "Logged in and joined Meshnet."
+
+      - name: Deregister test device
+        if: always()
+        run: |
+          docker exec smoke nordvpn logout --persist-token > /dev/null 2>&1 || true
+          docker rm -f smoke > /dev/null 2>&1 || true
+
   build-push:
     runs-on: ubuntu-latest
-
+    needs: [check, smoke-test]
     permissions:
       contents: read
       packages: write
-
     steps:
-      - name: Checkout    
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up QEMU
@@ -37,12 +169,19 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ needs.check.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.check.outputs.version }}
+            type=semver,pattern={{major}},value=${{ needs.check.outputs.version }}
+            type=raw,value=latest
+          labels: |
+            org.opencontainers.image.version=${{ needs.check.outputs.version }}
 
       - name: Login to GHCR
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io
+          registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
@@ -51,6 +190,9 @@ jobs:
         with:
           context: .
           platforms: linux/amd64,linux/arm64
+          pull: true
           push: ${{ github.event_name != 'pull_request' }}
+          build-args: |
+            NORDVPN_CLIENT_VERSION=${{ needs.check.outputs.version }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
