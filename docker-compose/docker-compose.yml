@@ -1,10 +1,18 @@
-version: "3"
 services:
   meshnet:
-    image: ghcr.io/mattstechinfo/meshnet:v3.17.0
+    image: ghcr.io/sternpaul/meshnet:latest
     restart: unless-stopped
     cap_add:
       - NET_ADMIN
       - NET_RAW
     env_file: .env
-    hostname: meshnet    # Make sure hostname is set! Without it, every restart will add a new peer to your Meshnet.
+    # Make sure hostname is set and differs from NORDVPN_NICKNAME, the client
+    # rejects a nickname equal to its own hostname.
+    hostname: meshnet
+    volumes:
+      # Persists the NordVPN login and device identity. Without it, every
+      # container recreation adds a new peer to your Meshnet.
+      - nordvpn-data:/var/lib/nordvpn
+
+volumes:
+  nordvpn-data:
