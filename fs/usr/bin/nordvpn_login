@@ -8,6 +8,17 @@ done
 # Set the token from file if ENV is not set
 [[ -z "${NORDVPN_TOKEN}" ]] && [[ -f "${NORDVPN_TOKENFILE}" ]] && NORDVPN_TOKEN="$(head -n 1 "${NORDVPN_TOKENFILE}")"
 
+# NordVPN 5.x asks for analytics consent on first use and loops forever
+# without a TTY, answer it non-interactively before any other command
+printf 'n\n' | nordvpn set analytics off > /dev/null 2>&1
+
+# Keep an existing login (persisted /var/lib/nordvpn), logging out again
+# would register this node as a new Meshnet device
+if nordvpn account > /dev/null 2>&1; then
+  echo "Already logged in."
+  exit 0
+fi
+
 # Make sure the token isn't destroyed on logout
 nordvpn logout --persist-token > /dev/null
 

@@ -1,15 +1,17 @@
-FROM ghcr.io/linuxserver/baseimage-ubuntu:jammy-version-21e99ce9
-LABEL maintainer="Matts Bos - MattsTechInfo"
+FROM ghcr.io/linuxserver/baseimage-ubuntu:noble
+LABEL maintainer="Sternpaul"
+LABEL org.opencontainers.image.source="https://github.com/Sternpaul/meshnet"
 
-# Configure the NordVPN client version to install at build
-ARG NORDVPN_CLIENT_VERSION=3.18.4
+# NordVPN client version to install at build, empty installs the latest.
+# CI resolves the latest version and passes it in explicitly.
+ARG NORDVPN_CLIENT_VERSION=
 
 # Avoid interactions during build process
 ARG DEBIAN_FRONTEND=noninteractive
 
 # Install dependencies, get the NordVPN Repo, install NordVPN client, cleanup and set executables
 RUN echo "**** Get NordVPN Repo ****" && \
-    curl https://repo.nordvpn.com/deb/nordvpn/debian/pool/main/nordvpn-release_1.0.0_all.deb --output /tmp/nordvpnrepo.deb && \
+    curl -fsSL https://repo.nordvpn.com/deb/nordvpn/debian/pool/main/n/nordvpn-release/nordvpn-release_1.0.0_all.deb --output /tmp/nordvpnrepo.deb && \
     apt-get install -y /tmp/nordvpnrepo.deb && \
     apt-get update -y && \
     echo "**** Install NordVPN client ****" && \
