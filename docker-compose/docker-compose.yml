@@ -1,18 +1,87 @@
+# NordVPN Meshnet node
+#
+# Quick start:
+#   1. Put your access token in the .env file next to this file:
+#        NORDVPN_TOKEN=your-token
+#      (Nord Account -> Services -> NordVPN -> Access token -> Generate new token,
+#       choose "Doesn't expire")
+#   2. Adjust the settings below, at least NORDVPN_NICKNAME.
+#   3. docker compose up -d && docker logs -f meshnet
+#      The node shows up in your Meshnet within a few seconds.
+#
+# Check the node:  docker exec meshnet nordvpn meshnet peer list
+
 services:
   meshnet:
+    # "latest" follows every new NordVPN client, pin a version (e.g. 5.4.1) to update by hand.
     image: ghcr.io/sternpaul/meshnet:latest
+    container_name: meshnet
     restart: unless-stopped
+
+    # Required: lets NordVPN create the Meshnet interface and its firewall rules.
     cap_add:
       - NET_ADMIN
       - NET_RAW
-    env_file: .env
-    # Make sure hostname is set and differs from NORDVPN_NICKNAME, the client
-    # rejects a nickname equal to its own hostname.
+
+    # Part of this device's Meshnet identity, keep it the same forever.
+    # Must be different from NORDVPN_NICKNAME.
     hostname: meshnet
+
+    # Optional: run Meshnet directly on the host network. Peers can then reach
+    # services on this host through its Meshnet IP. NordVPN's firewall rules then
+    # apply to the whole host, so never run "nordvpn connect" or enable Kill Switch
+    # in this container. Without it, Meshnet stays inside the container and peers
+    # reach the host/LAN through routing and local network permissions.
+    # network_mode: host
+
+    # Keeps the login and device identity when the container is recreated
+    # (image updates, compose changes). Without it, every recreation logs in again.
     volumes:
-      # Persists the NordVPN login and device identity. Without it, every
-      # container recreation adds a new peer to your Meshnet.
       - nordvpn-data:/var/lib/nordvpn
+
+    environment:
+      # --- Login -------------------------------------------------------------
+      # Read from .env so the token stays out of this file.
+      NORDVPN_TOKEN: ${NORDVPN_TOKEN:?Set NORDVPN_TOKEN in .env}
+      # Alternative: read the token from a mounted file / Docker secret instead.
+      # NORDVPN_TOKENFILE: /run/secrets/nordvpn_token
+
+      # --- This node ---------------------------------------------------------
+      # Name other peers see and can use to reach this node (e.g. "nas").
+      NORDVPN_NICKNAME: ""
+
+      # --- Peer permissions --------------------------------------------------
+      # Comma separated peers, as shown by "nordvpn meshnet peer list":
+      # Meshnet hostname (name-xyz.nord), nickname or Meshnet IP.
+      # NordVPN defaults for new peers: routing and local network DENIED,
+      # remote access and file sharing ALLOWED.
+      # DENY is applied first, then ALLOW, so ALLOW wins if a peer is in both.
+
+      # Peers that may use this node as an exit node (route their internet traffic through it).
+      NORDVPN_ALLOW_PEER_ROUTING: ""
+      # Peers that may reach your local network (LAN) through this node, also needs ROUTING.
+      NORDVPN_ALLOW_PEER_LOCAL: ""
+      # Peers that may connect to this node directly (remote access), allowed by default.
+      NORDVPN_ALLOW_PEER_REMOTE: ""
+      # Peers that may send files to this node, allowed by default.
+      NORDVPN_ALLOW_PEER_FILESHARE: ""
+
+      NORDVPN_DENY_PEER_ROUTING: ""
+      NORDVPN_DENY_PEER_LOCAL: ""
+      NORDVPN_DENY_PEER_REMOTE: ""
+      # A server node rarely needs to receive files, consider denying your peers here.
+      NORDVPN_DENY_PEER_FILESHARE: ""
+
+      # --- Health check ------------------------------------------------------
+      # Every INTERVAL seconds the URL is requested; if it fails, the container
+      # stops and Docker restarts it. Use something on your Meshnet or LAN to
+      # check that path instead of plain internet access.
+      NORDVPN_HEALTHCHECK_URL: www.google.com
+      NORDVPN_HEALTHCHECK_INTERVAL: 300
+
+      # --- Troubleshooting ---------------------------------------------------
+      # Any non-empty value shows the NordVPN daemon output in "docker logs".
+      NORDVPN_MESHNET_DEBUG: ""
 
 volumes:
   nordvpn-data:

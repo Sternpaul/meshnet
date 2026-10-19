@@ -46,7 +46,23 @@ docker run --rm -v meshnet-nordvpn-data:/var/lib/nordvpn -v "$PWD/meshnet-migrat
   --entrypoint cp ghcr.io/sternpaul/meshnet:latest /migrate/settings.dat /migrate/install.dat /var/lib/nordvpn/data/
 ```
 
-Then point your compose file at `ghcr.io/sternpaul/meshnet:latest`, mount the volume (`external: true`, `name: meshnet-nordvpn-data`) at `/var/lib/nordvpn`, keep the same `hostname`, and run `docker compose up -d`. The log should show `Already logged in.` and no new device appears in your Meshnet. To roll back, switch the image to `meshnet-backup:3.18.4` and remove the volume. Delete `meshnet-migrate` afterwards, it contains your login.
+Then point your compose file at `ghcr.io/sternpaul/meshnet:latest`, mount the volume at `/var/lib/nordvpn`, keep the same `hostname`, and run `docker compose up -d`:
+
+```yaml
+services:
+  meshnet:
+    image: ghcr.io/sternpaul/meshnet:latest
+    # ... your existing settings, same hostname ...
+    volumes:
+      - nordvpn-data:/var/lib/nordvpn
+
+volumes:
+  nordvpn-data:
+    name: meshnet-nordvpn-data
+    external: true
+```
+
+The log should show `Already logged in.` and no new device appears in your Meshnet. To roll back, switch the image to `meshnet-backup:3.18.4` and remove the volume. Delete `meshnet-migrate` afterwards, it contains your login.
 
 ## General Meshnet information
 Meshnet is a free self hosted VPN network connecting multiple nodes together. Its functionality, provided with the NordVPN application, is available on most platforms, including Android/Google TV. The usecases are extensive, the most popular ones are to access local data/network through Meshnet while having remote clients or setting up an exit node to route all client traffic through a single location.
@@ -68,7 +84,7 @@ This container requires an `Access token` to log on the NordVPN client. Follow t
 Since NordVPN 5.0 the client manages its firewall with nftables instead of iptables, with a default-deny policy. The host kernel must support nftables (`nf_tables` module), which all current distributions do. Some older NAS kernels (e.g. certain Synology models) do not; Meshnet will fail to come up there.
 
 ### Environment variables
-A `.env` file is supplied with the `docker-compose.yml` file for configuration purposes, this file already contains quite some commentary. A `configMap` is supplied for Kubernetes deployments.
+The example `docker-compose.yml` lists the most important variables with explanations; the access token goes into the `.env` file next to it. A `configMap` is supplied for Kubernetes deployments.
 
 #### General config
 - `NORDVPN_TOKEN` - Supply your `Access token` to be able to login. If you want to use a file or secret instead, please leave this ENV blank or comment it out.
@@ -97,14 +113,16 @@ Peers must be entered with their FQDN/Name assigned by Meshnet, comma separated,
 - `NORDVPN_ALLOW_PEER_REMOTE` = Allow peers to use remote access on this node.
 
 ### Deployment - docker-compose
-An example `docker-compose.yml` has been supplied to easily deploy the Meshnet node. Two pieces of configuration keep the node's identity stable on your Meshnet:
+An example [`docker-compose.yml`](docker-compose/docker-compose.yml) with explanations for every setting has been supplied to easily deploy the Meshnet node. Put your token in the `.env` file next to it, set `NORDVPN_NICKNAME` and peer permissions, and start it.
 
-- **Persist `/var/lib/nordvpn`** (the example uses a named volume). The NordVPN client stores its login and device identity there; without it, every container recreation registers a new peer on your Meshnet.
-- **Set a `hostname` that differs from `NORDVPN_NICKNAME`**. The client rejects a nickname equal to the machine's own hostname ("a domain with this name already exists").
+Two pieces of configuration keep the node's identity stable on your Meshnet:
+
+- **Set a fixed `hostname` that differs from `NORDVPN_NICKNAME`**. NordVPN derives the device's hardware ID from the host's hardware IDs and the hostname, so the same host and hostname come back as the same device. The client rejects a nickname equal to its own hostname ("a domain with this name already exists").
+- **Persist `/var/lib/nordvpn`** (the example uses a named volume). It keeps the login, WireGuard key and stored hardware ID, so updates don't log in again. It is required to keep a device migrated from the old 3.x image: NordVPN 5.x calculates a different hardware ID than 3.x, and only the stored one keeps the old device.
 
 NordVPN and Meshnet functionality require permissions to create a tunnel interface within the container. The container will require both capabilities `NET_ADMIN` and `NET_RAW`.
 
-Make sure you have the `.env` file next to the `docker-compose.yml` and run `docker compose up -d` to start the container. The node/peer should show up in your Meshnet within a few seconds.
+Make sure you have the `.env` file with your token next to the `docker-compose.yml` and run `docker compose up -d` to start the container. The node/peer should show up in your Meshnet within a few seconds.
 
 ### Deployment - Kubernetes
 Kubernetes examples are supplied to easily deploy the Meshnet node on a Kubernetes cluster. There are two files, `meshnet-deployment.yaml` and `meshnet-env.yaml`. In the `meshnet-deployment.yaml`, please make sure the `hostname` is not empty. Without configuring a `hostname`, every restart of the container will show as a new node within the Meshnet. To also survive pod recreation, mount a persistent volume at `/var/lib/nordvpn`.
